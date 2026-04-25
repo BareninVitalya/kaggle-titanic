@@ -1,0 +1,3 @@
+2026-04-24 16:27:16 | drop_features | score=0.8305 | std=0.0115 | drop=SibSp,Parch
+2026-04-24 16:28:51 | drop_features | score=0.8305 | std=0.0115 | drop=SibSp,Parch
+2026-04-24 16:30:30 | drop_features | score=0.830525 | std=0.011483 | drop=SibSp,Parch
