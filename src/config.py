@@ -86,3 +86,15 @@ OPTUNA_OBJECTIVES = {
     "logreg": LogregObjective,
     # "rf": RandomForestObjective,  # в будущем
 }
+
+# ── OpenFE ────────────────────────────────────────────────────────────────────
+USE_OPENFE = False
+
+OPENFE_PARAMS = {
+    "n_features": 30,
+    "corr_threshold": 0.95,
+    "greedy_threshold": 0.001,
+    "use_ablation": True,
+    "ablation_step": 5,
+    "n_jobs": 1,
+}

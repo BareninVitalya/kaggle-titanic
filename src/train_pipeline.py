@@ -1,14 +1,12 @@
-from pathlib import Path
-
 import joblib
-import pandas as pd
 
-from .config import TARGET_COL, PROCESSED_DATA_DIR, MODELS_DIR
+from .config import TARGET_COL, MODELS_DIR, USE_OPENFE, OPENFE_PARAMS
 from .data import load_train, save_processed
 from .features import TitanicFeatures
 from .modeling import build_model
 from .evaluate import cv_scores
 from .logging_utils import log_experiment
+from .openfe_stage import OpenFEStage
 
 
 def run_experiment(
@@ -16,39 +14,44 @@ def run_experiment(
     params: dict | None = None,
     run_id: str | None = None,
     save_model: bool = True,
+    use_openfe: bool = USE_OPENFE,
+    openfe_params: dict | None = None,
 ) -> tuple[float, float]:
-    """Полный цикл: загрузка → фичи → модель → CV → лог → fit → сохранение."""
-    # 1. Загрузка
+    """Полный цикл: загрузка → фичи → OpenFE → модель → CV → лог → fit → сохранение."""
     df = load_train()
     X_raw = df.drop(columns=[TARGET_COL])
     y = df[TARGET_COL]
 
-    # 2. Фичи
     fe = TitanicFeatures()
     X = fe.transform(X_raw)
 
-    # 3. Модель
-    model = build_model(model_name, X, params=params)
+    openfe_stage = None
+    if use_openfe:
+        resolved = {**OPENFE_PARAMS, **(openfe_params or {})}
+        openfe_stage = OpenFEStage(model_name=model_name, **resolved)
+        X = openfe_stage.fit_transform(X, y)
 
-    # 4. CV
+    model = build_model(model_name, X, params=params)
     mean, std, scores = cv_scores(model, X, y)
     log_experiment(model_name, mean, std, params or {})
 
     print(f"CV {model_name}: mean={mean:.4f} std={std:.4f}")
 
-    # 5. Финальное обучение на всех данных
     model.fit(X, y)
 
-    # 6. Сохранение модели
     if save_model:
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
         if run_id is None:
             run_id = model_name
+
         model_path = MODELS_DIR / f"{model_name}_{run_id}.joblib"
         joblib.dump(model, model_path)
         print(f"Saved model to {model_path}")
 
-    # 7. Сохранить очищенный train для EDA/heatmap (как в ноутбуке) [file:1]
+        if openfe_stage is not None:
+            stage_path = MODELS_DIR / f"openfe_stage_{run_id}.pkl"
+            openfe_stage.save(stage_path)
+
     df_proc = X.copy()
     df_proc[TARGET_COL] = y
     save_processed(df_proc, name="train_clean.csv")

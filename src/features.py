@@ -67,11 +67,11 @@ class TitanicFeatures:
     #     )
     #     return df
 
-    def _add_group_by_fare_and_age_std(self, df: pd.DataFrame) -> pd.DataFrame:
-        temp = df["Fare"].groupby(df["Age"]).std(ddof=1)  # ddof по умолчанию, но можно явно
-        temp.loc[np.nan] = np.nan
-        df["autoFE_f_21_manual"] = df["Age"].apply(lambda x: temp.loc[x])
-        return df
+    # def _add_group_by_fare_and_age_std(self, df: pd.DataFrame) -> pd.DataFrame:
+    #     temp = df["Fare"].groupby(df["Age"]).std(ddof=1)  # ddof по умолчанию, но можно явно
+    #     temp.loc[np.nan] = np.nan
+    #     df["autoFE_f_21_manual"] = df["Age"].apply(lambda x: temp.loc[x])
+    #     return df
 
     # --- Публичный метод -----------------------------------------------------
 
@@ -88,9 +88,9 @@ class TitanicFeatures:
         df = self._add_ticket_prefix(df)
         df = self._add_cabin_deck(df)
         df = self._encode_sex(df)
-        df = self._add_pclass_sex_feature(df)
+        # df = self._add_pclass_sex_feature(df)
         # df = self._add_group_by_pclass_and_embarked(df)
-        df = self._add_group_by_fare_and_age_std(df)
+        # df = self._add_group_by_fare_and_age_std(df)
 
         # Удаляем сильно сырьевые / ID колонки
         for col in ["PassengerId", "Name", "Ticket", "Cabin"]:
