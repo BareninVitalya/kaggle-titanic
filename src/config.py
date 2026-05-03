@@ -24,6 +24,10 @@ N_SPLITS = 5
 # Фичи, которые в ноутбуке показали себя "шумными" и были выкинуты [file:1]
 NOISE_FEATURES = ["TicketPrefix","Fare_bin", "Pclass"]
 
+NUM_FEATURES = ["Pclass", "familysize", "isalone", "Age_bin", "Fare_bin", "Pclass_Sex", "Sex"] # logreg, knn
+# NUM_FEATURES = ["Pclass", "familysize", "isalone", "Age", "Fare", "Pclass_Sex", "Sex"]
+CAT_FEATURES = ["Embarked", "Title"]  # пример
+
 # Позже мы ещё удаляли SibSp и Parch без потери качества [file:1]
 DROP_SIBSP_PARCH = True
 
@@ -36,10 +40,28 @@ DEFAULT_LOGREG_PARAMS = {
     "random_state": SEED,
 }
 
+DEFAULT_KNN_PARAMS = {
+    "n_neighbors": 7,
+    "weights": "uniform",
+    "metric": "minkowski",
+    "p": 2,
+}
+
+DEFAULT_TREE_PARAMS = {
+    "criterion": "gini",
+    "max_depth": 4,
+    "min_samples_split": 10,
+    "min_samples_leaf": 5,
+    "max_features": None,
+    "random_state": SEED,
+}
+
 DEFAULT_RF_PARAMS = {
     "n_estimators":    300,
+    "criterion":       "gini",
     "max_depth":       5,
     "min_samples_split": 10,
+    "min_samples_leaf":  4,
     "random_state":    SEED,
 }
 
@@ -60,6 +82,48 @@ DEFAULT_TREE_PARAMS = {
     "max_depth":        7,
     "min_samples_leaf": 5,
     "random_state":     SEED,
+}
+
+DEFAULT_CATBOOST_PARAMS = {
+    "iterations": 300,
+    "learning_rate": 0.05,
+    "depth": 3,
+    "l2_leaf_reg": 3.0,
+    "loss_function": "Logloss",
+    "eval_metric": "Accuracy",
+    "random_seed": SEED,
+    "verbose": False,
+    "allow_writing_files": False,
+}
+
+
+DEFAULT_LGBM_PARAMS = {
+    "n_estimators": 300,
+    "learning_rate": 0.05,
+    "max_depth": 3,
+    "num_leaves": 7,
+    "min_child_samples": 10,
+    "subsample": 0.9,
+    "colsample_bytree": 0.9,
+    "random_state": SEED,
+    "n_jobs": -1,
+    "verbosity": -1,
+}
+
+
+DEFAULT_XGB_PARAMS = {
+    "n_estimators": 300,
+    "learning_rate": 0.05,
+    "max_depth": 3,
+    "min_child_weight": 2,
+    "subsample": 0.9,
+    "colsample_bytree": 0.9,
+    "reg_alpha": 0.0,
+    "reg_lambda": 1.0,
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "random_state": SEED,
+    "n_jobs": -1,
 }
 
 

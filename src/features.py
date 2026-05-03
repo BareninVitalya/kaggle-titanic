@@ -11,9 +11,9 @@ class TitanicFeatures:
             self, drop_noise: bool = True,
             drop_sibsp_parch: bool = DROP_SIBSP_PARCH,
             use_log_fare: bool = True,
-            use_age_bins: bool = False,
-            use_fare_bins: bool = False,
-            use_pclass_sex: bool = False,
+            use_age_bins: bool = True,
+            use_fare_bins: bool = True,
+            use_pclass_sex: bool = True,
             model_type: str = "linear"
     ):
         self.drop_noise = drop_noise
@@ -23,8 +23,6 @@ class TitanicFeatures:
         self.use_fare_bins = use_fare_bins
         self.use_pclass_sex = use_pclass_sex
         self.model_type = model_type
-
-    # --- Внутренние шаги из ноутбука -----------------------------------------
 
     def _extract_title(self, df: pd.DataFrame) -> pd.DataFrame:
         # ", Title." между фамилией и именем [file:1]
@@ -107,22 +105,6 @@ class TitanicFeatures:
         df.drop(columns=["Fare"], inplace=True)
         return df
 
-    # def _add_group_by_pclass_and_embarked(self, df: pd.DataFrame) -> pd.DataFrame:
-    #     df["autoFE_f_5_manual"] = (
-    #         df["Pclass"]
-    #         .groupby(df["Embarked"])
-    #         .rank(ascending=True, pct=True)
-    #     )
-    #     return df
-
-    # def _add_group_by_fare_and_age_std(self, df: pd.DataFrame) -> pd.DataFrame:
-    #     temp = df["Fare"].groupby(df["Age"]).std(ddof=1)  # ddof по умолчанию, но можно явно
-    #     temp.loc[np.nan] = np.nan
-    #     df["autoFE_f_21_manual"] = df["Age"].apply(lambda x: temp.loc[x])
-    #     return df
-
-    # --- Публичный метод -----------------------------------------------------
-
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Главный метод: принимает сырые колонки Titanic, возвращает X с готовыми фичами,
@@ -151,22 +133,9 @@ class TitanicFeatures:
         if self.use_pclass_sex:
             df = self._add_pclass_sex_feature(df)
 
-        # Удаляем сильно сырьевые / ID колонки
-        for col in ["PassengerId", "Name", "Ticket", "Cabin"]:
-            if col in df.columns:
-                df.drop(columns=col, inplace=True)
-
-        # Удаляем шумные фичи, которые в ноутбуке ухудшали/не улучшали score [file:1]
-        if self.drop_noise:
-            for col in ["TicketPrefix","ticketgroupsize", "CabinDeck"]: #["TicketPrefix","Fare_bin", "Pclass"]
-                if col in df.columns:
-                    df.drop(columns=col, inplace=True)
-
-        # Удаляем SibSp, Parch, т.к. familysize их уже содержит и влияние по CV нулевое [file:1]
-        if self.drop_sibsp_parch:
-            for col in ["SibSp", "Parch"]:
-                if col in df.columns:
-                    df.drop(columns=col, inplace=True)
+        df = self._drop_noise_features(df, ["PassengerId", "Name", "Ticket", "Cabin"])
+        df = self._drop_noise_features(df, ["SibSp", "Parch"])
+        df = self._drop_noise_features(df, ["TicketPrefix","ticketgroupsize", "CabinDeck"])
 
         return df
 

@@ -7,10 +7,29 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder, OrdinalEncoder,
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from catboost import CatBoostClassifier
+from lightgbm import LGBMClassifier
+from xgboost import XGBClassifier
 
-from .config import SEED,DEFAULT_LOGREG_PARAMS, TARGET_COL
+
+from .config import (
+    SEED,
+    DEFAULT_LOGREG_PARAMS,
+    TARGET_COL,
+    NUM_FEATURES,
+    CAT_FEATURES,
+    DEFAULT_TREE_PARAMS,
+    DEFAULT_KNN_PARAMS,
+    DEFAULT_RF_PARAMS,
+    DEFAULT_CATBOOST_PARAMS,
+    DEFAULT_LGBM_PARAMS,
+    DEFAULT_XGB_PARAMS,
+)
+
 from .features import TitanicFeaturesTransformer
-from .data import load_train, load_test
+from .data import load_train, load_test, save_processed
 
 
 def build_matual_info_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
@@ -46,11 +65,14 @@ def build_matual_info_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
     return preprocessor
 
 
-def build_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
+def build_preprocessor(X: Optional[pd.DataFrame] = None, transform_off: bool = False) -> ColumnTransformer:
     """Строим общий препроцессор для числовых и категориальных признаков."""
-
-    num_cols = X.select_dtypes(include="number").columns
-    cat_cols = X.select_dtypes(exclude="number").columns
+    if not transform_off and X is not None:
+        num_cols = X.select_dtypes(include="number").columns
+        cat_cols = X.select_dtypes(exclude="number").columns
+    else:
+        num_cols = NUM_FEATURES
+        cat_cols = CAT_FEATURES
 
     num_pipeline = Pipeline(
         steps=[
@@ -75,12 +97,44 @@ def build_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
 
     return preprocessor
 
+def build_catboost_preprocessor(X: Optional[pd.DataFrame] = None, transform_off: bool = False) -> ColumnTransformer:
+    """CatBoost препроцессор"""
+    if not transform_off and X is not None:
+        num_cols = X.select_dtypes(include="number").columns
+        cat_cols = X.select_dtypes(exclude="number").columns
+    else:
+        num_cols = NUM_FEATURES
+        cat_cols = CAT_FEATURES
+
+    num_pipeline = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+        ]
+    )
+
+    cat_pipeline = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", num_pipeline, num_cols),
+            ("cat", cat_pipeline, cat_cols),
+        ]
+    )
+
+    preprocessor.set_output(transform="pandas")
+
+    return preprocessor
+
 
 def build_logreg_model(X: pd.DataFrame, params: Optional[Dict] = None, transform_off: bool = False) -> Pipeline:
 
     if transform_off:
         fe = FunctionTransformer(lambda x: x)
-        X_fe = X.copy()
+        pre = build_preprocessor(X)
     else:
         fe = TitanicFeaturesTransformer(
             use_log_fare=True,
@@ -89,31 +143,169 @@ def build_logreg_model(X: pd.DataFrame, params: Optional[Dict] = None, transform
             use_pclass_sex=True,
             model_type="linear"
         )
-        X_fe = fe.fit_transform(X)
-    
-    pre = build_preprocessor(X_fe)
+        pre = build_preprocessor()
 
     base_params = DEFAULT_LOGREG_PARAMS.copy()
-    base_params.update(params or {})
+
+    if params:
+        base_params.update(params)
 
 
     clf = LogisticRegression(**base_params)
     return Pipeline([("feat", fe), ("prep", pre), ("model", clf)])
 
+def build_knn_model(X: pd.DataFrame, params: Optional[Dict] = None, transform_off: bool = False) -> Pipeline:
 
-def build_rf_model(X: pd.DataFrame, params: Optional[Dict] = None) -> Pipeline:
-    pre = build_preprocessor(X)
-    base_params = dict(
-        n_estimators=300,
-        max_depth=5,
-        min_samples_split=10,
-        random_state=SEED,
-    )
+    if transform_off:
+        fe = FunctionTransformer(lambda x: x)
+        pre = build_preprocessor(X)
+    else:
+        fe = TitanicFeaturesTransformer(
+            use_log_fare=True,
+            use_age_bins=True,
+            use_fare_bins=True,
+            use_pclass_sex=True,
+            model_type="knn"
+        )
+        pre = build_preprocessor()
+
+    base_params = DEFAULT_KNN_PARAMS.copy()
+
+    if params:
+        base_params.update(params)
+
+    clf = KNeighborsClassifier(**base_params)
+
+    return Pipeline([("feat", fe), ("prep", pre), ("model", clf)])
+
+def build_tree_model(X: pd.DataFrame, params: Optional[Dict] = None, transform_off: bool = False) -> Pipeline:
+
+    if transform_off:
+        fe = FunctionTransformer(lambda x: x)
+        pre = build_preprocessor(X)
+    else:
+        fe = TitanicFeaturesTransformer(
+            use_log_fare=True,
+            use_age_bins=True,
+            use_fare_bins=True,
+            use_pclass_sex=True,
+            model_type="tree"
+        )
+        pre = build_preprocessor()
+
+    base_params = DEFAULT_TREE_PARAMS.copy()
+
+    if params:
+        base_params.update(params)
+
+    clf = DecisionTreeClassifier(**base_params)
+
+    return Pipeline([("feat", fe), ("prep", pre), ("model", clf)])
+
+def build_rf_model(X: pd.DataFrame, params: Optional[Dict] = None, transform_off: bool = False) -> Pipeline:
+
+    if transform_off:
+        fe = FunctionTransformer(lambda x: x)
+        pre = build_preprocessor(X)
+    else:
+        fe = TitanicFeaturesTransformer(
+            use_log_fare=True,
+            use_age_bins=True,
+            use_fare_bins=True,
+            use_pclass_sex=True,
+            model_type="rf"
+        )
+        pre = build_preprocessor()
+
+    base_params = DEFAULT_RF_PARAMS.copy()
+
     if params:
         base_params.update(params)
 
     clf = RandomForestClassifier(**base_params)
-    return Pipeline([("prep", pre), ("model", clf)])
+    return Pipeline([("feat", fe), ("prep", pre), ("model", clf)])
+
+def build_catboost_model(X: pd.DataFrame, params: Optional[Dict] = None, transform_off: bool = False) -> Pipeline:
+
+    if transform_off:
+        fe = FunctionTransformer(lambda x: x)
+        pre = build_preprocessor(X)
+        cat_cols = X.select_dtypes(exclude="number").columns
+    else:
+        fe = TitanicFeaturesTransformer(
+            use_log_fare=True,
+            use_age_bins=True,
+            use_fare_bins=True,
+            use_pclass_sex=True,
+            model_type="rf"
+        )
+        pre = build_preprocessor()
+        cat_cols = CAT_FEATURES
+
+    base_params = DEFAULT_CATBOOST_PARAMS.copy()
+
+    if params:
+        base_params.update(params)
+
+    clf = CatBoostClassifier(**base_params)
+    return Pipeline([("feat", fe), ("prep", pre), ("model", clf)])
+
+def build_lgbm_model(
+    X: pd.DataFrame,
+    params: Optional[Dict] = None,
+    transform_off: bool = False
+) -> Pipeline:
+
+    if transform_off:
+        fe = FunctionTransformer(lambda x: x)
+        pre = build_preprocessor(X)
+    else:
+        fe = TitanicFeaturesTransformer(
+            use_log_fare=True,
+            use_age_bins=True,
+            use_fare_bins=True,
+            use_pclass_sex=True,
+            model_type="lgbm"
+        )
+        pre = build_preprocessor()
+
+    base_params = DEFAULT_LGBM_PARAMS.copy()
+
+    if params:
+        base_params.update(params)
+
+    clf = LGBMClassifier(**base_params)
+
+    return Pipeline([("feat", fe), ("prep", pre), ("model", clf)])
+
+def build_xgb_model(
+    X: pd.DataFrame,
+    params: Optional[Dict] = None,
+    transform_off: bool = False
+) -> Pipeline:
+
+    if transform_off:
+        fe = FunctionTransformer(lambda x: x)
+        pre = build_preprocessor(X)
+    else:
+        fe = TitanicFeaturesTransformer(
+            use_log_fare=True,
+            use_age_bins=True,
+            use_fare_bins=True,
+            use_pclass_sex=True,
+            model_type="xgb"
+        )
+        pre = build_preprocessor()
+
+    base_params = DEFAULT_XGB_PARAMS.copy()
+
+    if params:
+        base_params.update(params)
+
+    clf = XGBClassifier(**base_params)
+
+    return Pipeline([("feat", fe), ("prep", pre), ("model", clf)])
+
 
 
 def build_gb_model(X: pd.DataFrame, params: Optional[Dict] = None) -> Pipeline:
@@ -136,13 +328,21 @@ def build_model(name: str, X: pd.DataFrame, params: Optional[Dict] = None, trans
     name = name.lower()
     if name in ("logreg", "lr", "logistic"):
         return build_logreg_model(X, params, transform_off)
+    if name in ("knn", "kneighbors", "k_neighbors"):
+        return build_knn_model(X, params, transform_off)
+    if name in ("tree", "dt", "decision_tree"):
+        return build_tree_model(X, params, transform_off)
     if name in ("rf", "random_forest"):
-        return build_rf_model(X, params)
-    if name in ("gb", "gboost", "gradboost"):
-        return build_gb_model(X, params)
+        return build_rf_model(X, params, transform_off)
+    if name in ("catboost", "cat"):
+        return build_catboost_model(X, params, transform_off)
+    if name in ("lgbm", "lightgbm"):
+        return build_lgbm_model(X, params, transform_off)
+    if name in ("xgb", "xgboost"):
+        return build_xgb_model(X, params, transform_off)
     raise ValueError(f"Unknown model name: {name}")
 
-def train_model(model_name: str = 'logreg'):
+def train_model(model_name: str = 'logreg', params: Optional[Dict] = None):
     df_train = load_train()
 
     X_train = df_train.drop(columns=[TARGET_COL])
@@ -152,3 +352,12 @@ def train_model(model_name: str = 'logreg'):
     model.fit(X_train, y_train)
 
     return model
+
+def predict_and_save_titanic(model, test_data: pd.DataFrame, file_name: str = "submission"):
+
+    submission = pd.DataFrame({
+        "PassengerId": test_data["PassengerId"],
+        "Survived": model.predict(test_data).astype(int),
+    })
+
+    save_processed(submission, f"{file_name}.csv")

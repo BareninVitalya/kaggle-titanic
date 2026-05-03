@@ -2,7 +2,7 @@
 from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
 from sklearn.base import clone
 from scipy.stats import loguniform
-from .tuning_objectives import LogregObjective
+from .tuning_objectives import LogregObjective, KNNObjective, TreeObjective, RFObjective, CatBoostObjective
 import optuna
 
 from .modeling import build_model
@@ -49,15 +49,25 @@ def tune_with_optuna(
     random_state: int = SEED,
     transform_off: bool = True
 ):
-    if model_name == 'logreg':
+    if model_name == 'knn':
+        objective_class = KNNObjective
+    elif model_name == "tree":
+        objective_class = TreeObjective
+    elif model_name in ("rf", "random_forest", "randomforest"):
+        objective_class = RFObjective
+    elif model_name in ("catboost", "cat"):
+        objective_class = CatBoostObjective
+    # elif model_name == 'logreg':
+    else:
         base_params = base_params or {}
         base_params["penalty"] = "l2" # костыль который нужен чтобы работало на версии 1.8 sklearn
+        objective_class = LogregObjective
 
 
     base_model = build_model(model_name, X, params=base_params, transform_off=transform_off)
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
 
-    objective = LogregObjective(base_model, X, y, cv)
+    objective = objective_class(base_model, X, y, cv)
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(
