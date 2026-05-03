@@ -8,6 +8,10 @@ from .evaluate import cv_scores
 from .logging_utils import log_experiment
 from .openfe_stage import OpenFEStage
 
+from typing import Any
+import pandas as pd
+import numpy as np
+
 
 def run_experiment(
     model_name: str = "logreg",
@@ -57,6 +61,19 @@ def run_experiment(
     save_processed(df_proc, name="train_clean.csv")
 
     return mean, std
+
+def quick_experiment(
+    X: pd.DataFrame,
+    y: pd.Series,
+    model_name: str = "logreg",
+    params: dict[str, Any] | None = None,
+    transform_off: bool = True
+) -> None:
+
+    model = build_model(model_name, X, params, transform_off)
+    mean, std, scores = cv_scores(model, X, y)
+    print(f"CV {model_name}: mean={mean} std={std}")
+    return None
 
 
 if __name__ == "__main__":

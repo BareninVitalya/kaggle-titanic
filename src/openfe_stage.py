@@ -6,18 +6,28 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from lightgbm import LGBMClassifier
 
 from .config import MODELS_DIR, SEED
 from .evaluate import cv_scores
 from .feature_search import apply_openfe, run_openfe
 from .modeling import build_model
 from openfe import tree_to_formula
+from typing import Any
+
+
+model = LGBMClassifier(
+    random_state=SEED,
+    deterministic=True,
+    n_jobs=1
+)
 
 
 @dataclass
 class OpenFEStage:
     """Отдельный этап поиска, отбора и применения OpenFE-признаков."""
 
+    estimator: Any =  model
     enabled: bool = True
     n_features: int = 30
     model_name: str = "logreg"
@@ -95,7 +105,7 @@ class OpenFEStage:
     ) -> list[str]:
         current_X = X_base.copy()
         current_score, _, _ = cv_scores(
-            build_model(self.model_name, current_X), current_X, y
+            build_model(self.model_name, current_X, transform_off=True), current_X, y
         )
         selected: list[str] = []
         self.greedy_history_ = []
@@ -104,7 +114,7 @@ class OpenFEStage:
         for col in ofe_cols:
             cand_X = pd.concat([X_base, X_with_ofe[[col]]], axis=1)
             mean, std, _ = cv_scores(
-                build_model(self.model_name, cand_X), cand_X, y
+                build_model(self.model_name, cand_X, transform_off=True), cand_X, y
             )
             per_feat.append({
                 "col": col, "mean": mean, "std": std,
@@ -117,7 +127,7 @@ class OpenFEStage:
             col = row["col"]
             cand_X = pd.concat([current_X, X_with_ofe[[col]]], axis=1)
             mean, std, _ = cv_scores(
-                build_model(self.model_name, cand_X), cand_X, y
+                build_model(self.model_name, cand_X, transform_off=True), cand_X, y
             )
             delta = mean - current_score
             self.greedy_history_.append({
@@ -145,7 +155,7 @@ class OpenFEStage:
         ofe_cols: list[str],
     ) -> pd.DataFrame:
         base_score, base_std, _ = cv_scores(
-            build_model(self.model_name, X_base), X_base, y
+            build_model(self.model_name, X_base, transform_off=True), X_base, y
         )
         rows = [{"n_features": 0, "mean": base_score,
                  "std": base_std, "delta": 0.0}]
@@ -154,7 +164,7 @@ class OpenFEStage:
             cols_batch = ofe_cols[:n]
             X_exp = pd.concat([X_base, X_with_ofe[cols_batch]], axis=1)
             mean, std, _ = cv_scores(
-                build_model(self.model_name, X_exp), X_exp, y
+                build_model(self.model_name, X_exp, transform_off=True), X_exp, y
             )
             rows.append({
                 "n_features": n, "mean": mean,

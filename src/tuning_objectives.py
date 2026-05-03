@@ -16,13 +16,16 @@ class LogregObjective:
 
     def __call__(self, trial):
         params = {
-            f"{self.step_name}__C": trial.suggest_float("model__C", 1e-3, 1e3, log=True),
+            f"{self.step_name}__C": trial.suggest_float("model__C", 0.01, 8.0, log=True),
+            f"{self.step_name}__penalty": "l2",
             f"{self.step_name}__solver": trial.suggest_categorical(
-                "model__solver", ["lbfgs", "liblinear"]
+                "model__solver", ["lbfgs"]
             ),
+            f"{self.step_name}__l1_ratio": 0.0,
         }
         model = clone(self.base_model)
         model.set_params(**params)
+
         scores = cross_val_score(
             model, self.X, self.y, cv=self.cv, scoring="accuracy", n_jobs=-1
         )

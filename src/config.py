@@ -22,7 +22,7 @@ TARGET_COL = "Survived"
 N_SPLITS = 5
 
 # Фичи, которые в ноутбуке показали себя "шумными" и были выкинуты [file:1]
-NOISE_FEATURES = ["TicketPrefix", "CabinDeck", "isalone", "ticketgroupsize"]
+NOISE_FEATURES = ["TicketPrefix","Fare_bin", "Pclass"]
 
 # Позже мы ещё удаляли SibSp и Parch без потери качества [file:1]
 DROP_SIBSP_PARCH = True
@@ -30,8 +30,8 @@ DROP_SIBSP_PARCH = True
 # ── Дефолтные параметры моделей (из экспериментов в ноутбуке) ─────────────────
 DEFAULT_LOGREG_PARAMS = {
     "max_iter":    2000,
-    "C":           0.9550397388841476,
-    "l1_ratio":     0,
+    "C":           1.0,
+    "l1_ratio":    0.0,
     "solver":      "lbfgs",
     "random_state": SEED,
 }
@@ -74,18 +74,18 @@ RANDOM_SEARCH_SPACE = {
     # сюда потом можно добавить "rf", "xgb" и т.д.
 }
 
-def optuna_space_logreg(trial):
-    return {
-        "model__C": trial.suggest_float("model__C", 1e-3, 1e3, log=True),
-        "model__solver": trial.suggest_categorical(
-            "model__solver", ["lbfgs", "liblinear"]
-        ),
-    }
+# def optuna_space_logreg(trial):
+#     return {
+#         "model__C": trial.suggest_float("model__C", 1e-3, 1e3, log=True),
+#         "model__solver": trial.suggest_categorical(
+#             "model__solver", ["lbfgs", "liblinear"]
+#         ),
+#     }
 
-OPTUNA_OBJECTIVES = {
-    "logreg": LogregObjective,
-    # "rf": RandomForestObjective,  # в будущем
-}
+# OPTUNA_OBJECTIVES = {
+#     "logreg": LogregObjective,
+#     # "rf": RandomForestObjective,  # в будущем
+# }
 
 # ── OpenFE ────────────────────────────────────────────────────────────────────
 USE_OPENFE = False
@@ -98,3 +98,5 @@ OPENFE_PARAMS = {
     "ablation_step": 5,
     "n_jobs": 1,
 }
+
+NUMERIC_AS_CATEGORICAL_MAX_UNIQUE = 10

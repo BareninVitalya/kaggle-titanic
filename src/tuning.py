@@ -6,7 +6,7 @@ from .tuning_objectives import LogregObjective
 import optuna
 
 from .modeling import build_model
-from .config import RANDOM_SEARCH_SPACE
+from .config import RANDOM_SEARCH_SPACE, SEED
 
 def tune_with_random_search(
     model_name: str,
@@ -15,9 +15,9 @@ def tune_with_random_search(
     base_params: dict | None = None,
     n_iter: int = 30,
     scoring: str = "accuracy",
-    random_state: int = 42,
+    random_state: int = SEED,
 ):
-    base_model = build_model(model_name, X, params=base_params)
+    base_model = build_model(model_name, X, params=base_params, transform_off=True)
 
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
 
@@ -46,9 +46,15 @@ def tune_with_optuna(
     base_params: dict | None = None,
     n_trials: int = 50,
     scoring: str = "accuracy",
-    random_state: int = 42,
+    random_state: int = SEED,
+    transform_off: bool = True
 ):
-    base_model = build_model(model_name, X, params=base_params)
+    if model_name == 'logreg':
+        base_params = base_params or {}
+        base_params["penalty"] = "l2" # костыль который нужен чтобы работало на версии 1.8 sklearn
+
+
+    base_model = build_model(model_name, X, params=base_params, transform_off=transform_off)
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
 
     objective = LogregObjective(base_model, X, y, cv)
@@ -61,6 +67,7 @@ def tune_with_optuna(
     study.optimize(objective, n_trials=n_trials)
 
     best_model = clone(base_model)
+
     best_model.set_params(**study.best_trial.params)
     best_model.fit(X, y)
     return best_model, study

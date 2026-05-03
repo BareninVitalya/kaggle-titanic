@@ -2,6 +2,16 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from pandas.core.common import random_state
+from sklearn.feature_selection import mutual_info_classif
+from sklearn.model_selection import cross_val_score
+from sklearn.inspection import permutation_importance
+from itertools import combinations
+from math import comb
+import pandas as pd
+from sklearn.base import clone
+from sklearn.model_selection import cross_val_score
+
 from pandas.api.types import (
     is_bool_dtype,
     is_categorical_dtype,
@@ -10,6 +20,11 @@ from pandas.api.types import (
     is_object_dtype,
     is_string_dtype,
 )
+from typing import Literal, Optional, Tuple, Iterable, Sequence, Callable
+from .config import SEED, NUMERIC_AS_CATEGORICAL_MAX_UNIQUE
+from .modeling import build_matual_info_preprocessor
+from .evaluate import cv_scores
+
 
 class DataProfiler:
     """
@@ -113,7 +128,7 @@ class DataProfiler:
         if is_numeric_dtype(dtype):
             # Числовая с низкой кардинальностью (< 10 уник.) — скорее всего кодированная категория
             n_unique = series.nunique()
-            if n_unique <= 10 and series.isin([0, 1]).all():
+            if n_unique <= 10 and series.dropna().isin([0, 1]).all():
                 return 'categorical'   # бинарная/флаговая
             return 'numeric'
 
@@ -430,28 +445,60 @@ class DataProfiler:
         plt.tight_layout()
         plt.show()
 
-    def plot_value_counts(self, col: str, top_n: int = 20,
-                          normalize: bool = False, figsize=(6, 4)):
+    def plot_value_counts(
+            self,
+            col: str,
+            top_n: int = 20,
+            normalize: bool = False,
+            figsize=(6, 4),
+            max_numeric_unique: int = 20,
+    ):
         """
-        Горизонтальный bar chart топ-N категорий:
-          - normalize=True → доли
-          - normalize=False → абсолютные частоты
+        Горизонтальный bar chart топ-N значений.
+
+        Подходит для:
+          - categorical
+          - boolean
+          - high_cardinality
+          - numeric с небольшим числом уникальных значений
         """
         self._check_col(col)
-        col_type = self.get_col_type(col)
-        if col_type not in ("categorical", "boolean", "high_cardinality"):
-            raise ValueError(
-                f"plot_value_counts: column '{col}' is not categorical-like (got '{col_type}')"
-            )
 
         s = self.df[col]
-        vc = s.value_counts(normalize=normalize).head(top_n)
+        col_type = self.get_col_type(col)
+
+        is_numeric_low_cardinality = (
+                pd.api.types.is_numeric_dtype(s)
+                and s.nunique(dropna=True) <= max_numeric_unique
+        )
+
+        is_allowed = (
+                col_type in ("categorical", "boolean", "high_cardinality")
+                or is_numeric_low_cardinality
+        )
+
+        if not is_allowed:
+            raise ValueError(
+                f"plot_value_counts: column '{col}' is not categorical-like. "
+                f"got col_type='{col_type}', unique={s.nunique(dropna=True)}"
+            )
+
+        vc = s.value_counts(normalize=normalize, dropna=False).head(top_n)
 
         plt.figure(figsize=figsize)
-        sns.barplot(x=vc.values, y=vc.index, orient="h")
+
+        sns.barplot(
+            x=vc.values,
+            y=vc.index.astype(str),
+            orient="h",
+        )
+
         plt.xlabel("Proportion" if normalize else "Count")
         plt.ylabel(col)
-        plt.title(f"Top-{top_n} value counts of {col}")
+
+        unique_count = s.nunique(dropna=True)
+        plt.title(f"Top-{top_n} value counts of {col} | unique={unique_count}")
+
         plt.tight_layout()
         plt.show()
 
@@ -569,11 +616,13 @@ class DataProfiler:
             include_target : включать ли target, если он числовой
             method         : 'pearson', 'spearman', 'kendall'
         """
-        num_cols = self.numeric_cols.copy()
+        num_cols = [
+            col for col in self.df.columns
+            if self._is_corr_compatible(col)
+        ]
 
-        if include_target and self.target is not None and self.get_col_type(self.target) == "numeric":
-            if self.target not in num_cols:
-                num_cols.append(self.target)
+        if not include_target and self.target in num_cols:
+            num_cols.remove(self.target)
 
         if not num_cols:
             return pd.DataFrame()
@@ -604,8 +653,10 @@ class DataProfiler:
         """
         self._check_target()
 
-        if self.get_col_type(self.target) != "numeric":
-            raise ValueError("plot_target_correlation: target must be numeric")
+        if not self._is_corr_compatible(self.target):
+            raise ValueError(
+                "plot_target_correlation: target must be numeric, boolean, or binary encoded"
+            )
 
         corr = self.correlation_matrix(include_target=True, method=method)
 
@@ -623,7 +674,7 @@ class DataProfiler:
         plt.tight_layout()
         plt.show()
 
-    def plot_feature_vs_target(self, col: str, figsize=(6, 4)):
+    def plot_feature_vs_target(self, col: str, figsize_per_plot=(6, 4)):
         """
         Автоматически выбирает тип графика в зависимости от типов
         признака и target.
@@ -640,76 +691,172 @@ class DataProfiler:
         if col == self.target:
             raise ValueError("plot_feature_vs_target: col must be different from target")
 
-        col_type, target_type = self.get_col_pair_type(col, self.target)
+        col_roles = self.get_col_plot_roles(col)
+        target_roles = self.get_col_plot_roles(self.target)
 
-        plt.figure(figsize=figsize)
+        plot_specs = []
 
-        # 1. numeric -> numeric
-        if col_type == "numeric" and target_type == "numeric":
-            sns.regplot(x=self.df[col], y=self.df[self.target], scatter_kws={"alpha": 0.5})
-            plt.xlabel(col)
-            plt.ylabel(self.target)
-            plt.title(f"{col} vs {self.target}")
+        if "numeric" in col_roles and "numeric" in target_roles:
+            plot_specs.append("numeric_numeric")
 
-        # 2. categorical -> numeric
-        elif col_type == "categorical" and target_type == "numeric":
-            sns.boxplot(x=self.df[col], y=self.df[self.target])
-            plt.xticks(rotation=45, ha="right")
-            plt.xlabel(col)
-            plt.ylabel(self.target)
-            plt.title(f"{col} vs {self.target}")
+        if "categorical" in col_roles and "numeric" in target_roles:
+            plot_specs.append("categorical_numeric")
 
-        # 3. numeric -> categorical
-        elif col_type == "numeric" and target_type == "categorical":
-            sns.boxplot(x=self.df[self.target], y=self.df[col])
-            plt.xlabel(self.target)
-            plt.ylabel(col)
-            plt.title(f"{col} by {self.target}")
+        if "numeric" in col_roles and "categorical" in target_roles:
+            plot_specs.append("numeric_categorical")
 
-        # 4. categorical -> categorical
-        elif col_type == "categorical" and target_type == "categorical":
-            sns.countplot(x=self.df[col], hue=self.df[self.target])
-            plt.xticks(rotation=45, ha="right")
-            plt.xlabel(col)
-            plt.ylabel("Count")
-            plt.title(f"{col} vs {self.target}")
+        if "categorical" in col_roles and "categorical" in target_roles:
+            plot_specs.append("categorical_categorical")
 
-        else:
-            plt.close()
+        if not plot_specs:
             raise ValueError(
-                f"Unsupported pair type: ({col_type}, {target_type}) for ({col}, {self.target})"
+                f"No available plots for {col=} and target={self.target!r}. "
+                f"{col_roles=}, {target_roles=}"
             )
 
-        plt.tight_layout()
+        n_plots = len(plot_specs)
+
+        fig, axes = plt.subplots(
+            nrows=n_plots,
+            ncols=1,
+            figsize=(figsize_per_plot[0], figsize_per_plot[1] * n_plots),
+        )
+
+        if n_plots == 1:
+            axes = [axes]
+
+        for ax, plot_type in zip(axes, plot_specs):
+
+            if plot_type == "numeric_numeric":
+                sns.regplot(
+                    x=self.df[col],
+                    y=self.df[self.target],
+                    scatter_kws={"alpha": 0.5},
+                    ax=ax,
+                )
+                ax.set_xlabel(col)
+                ax.set_ylabel(self.target)
+                ax.set_title(f"{col} vs {self.target} | numeric → numeric")
+
+            elif plot_type == "categorical_numeric":
+                sns.boxplot(
+                    x=self.df[col],
+                    y=self.df[self.target],
+                    ax=ax,
+                )
+                ax.tick_params(axis="x", rotation=45)
+                ax.set_xlabel(col)
+                ax.set_ylabel(self.target)
+                ax.set_title(f"{col} vs {self.target} | categorical → numeric")
+
+            elif plot_type == "numeric_categorical":
+                sns.boxplot(
+                    x=self.df[self.target],
+                    y=self.df[col],
+                    ax=ax,
+                )
+                ax.set_xlabel(self.target)
+                ax.set_ylabel(col)
+                ax.set_title(f"{col} by {self.target} | numeric → categorical")
+
+            elif plot_type == "categorical_categorical":
+                sns.countplot(
+                    x=self.df[col],
+                    hue=self.df[self.target],
+                    ax=ax,
+                )
+                ax.tick_params(axis="x", rotation=45)
+                ax.set_xlabel(col)
+                ax.set_ylabel("Count")
+                ax.set_title(f"{col} vs {self.target} | categorical → categorical")
+
+        fig.tight_layout()
         plt.show()
 
-    def crosstab(self, col1: str, col2: str, normalize: str = "index") -> pd.DataFrame:
-        """
-        Возвращает кросс-таблицу для двух категориальных признаков.
+    # def crosstab(self, col1: str, col2: str, normalize: str = "index") -> pd.DataFrame:
+    #     """
+    #     Возвращает кросс-таблицу для двух категориальных признаков.
+    #
+    #     normalize:
+    #       - False / None : абсолютные значения
+    #       - 'index'      : нормировка по строкам
+    #       - 'columns'    : нормировка по столбцам
+    #       - 'all'        : нормировка по всей таблице
+    #     """
+    #     self._check_col(col1)
+    #     self._check_col(col2)
+    #
+    #     return pd.crosstab(self.df[col1], self.df[col2], normalize=normalize)
 
-        normalize:
-          - False / None : абсолютные значения
-          - 'index'      : нормировка по строкам
-          - 'columns'    : нормировка по столбцам
-          - 'all'        : нормировка по всей таблице
+    def crosstab(
+            self,
+            row_cols: str | Sequence[str],
+            col: str,
+            normalize: str | bool | None = "index",
+    ) -> pd.DataFrame:
         """
-        self._check_col(col1)
-        self._check_col(col2)
+        Кросс-таблица.
 
-        return pd.crosstab(self.df[col1], self.df[col2], normalize=normalize)
+        row_cols:
+          - str: одна колонка в строках
+          - list[str]: несколько колонок в строках
 
-    def plot_crosstab_heatmap(self, col1: str, col2: str, normalize: str = "index",
-                              cmap: str = "Blues", figsize=(6, 4)):
+        col:
+          - колонка в столбцах, например target
         """
-        Тепловая карта кросс-таблицы для двух категориальных признаков.
-        """
-        ct = self.crosstab(col1, col2, normalize=normalize)
+        if isinstance(row_cols, str):
+            row_cols = [row_cols]
+
+        for c in row_cols:
+            self._check_col(c)
+
+        self._check_col(col)
+
+        row_data = [self.df[c] for c in row_cols]
+
+        return pd.crosstab(
+            row_data,
+            self.df[col],
+            normalize=normalize,
+        )
+
+    # def plot_crosstab_heatmap(self, col1: str, col2: str, normalize: str = "index",
+    #                           cmap: str = "Blues", figsize=(6, 4)):
+    #     """
+    #     Тепловая карта кросс-таблицы для двух категориальных признаков.
+    #     """
+    #     ct = self.crosstab(col1, col2, normalize=normalize)
+    #
+    #     plt.figure(figsize=figsize)
+    #     sns.heatmap(ct, annot=True, cmap=cmap, fmt=".2f")
+    #     plt.xlabel(col2)
+    #     plt.ylabel(col1)
+    #     plt.title(f"Crosstab heatmap: {col1} vs {col2}")
+    #     plt.tight_layout()
+    #     plt.show()
+
+    def plot_crosstab_heatmap(
+            self,
+            row_cols: str | Sequence[str],
+            col: str,
+            normalize: str | bool | None = "index",
+            cmap: str = "Blues",
+            figsize=(6, 4),
+    ):
+        ct = self.crosstab(row_cols, col, normalize=normalize)
+
+        row_label = (
+            row_cols
+            if isinstance(row_cols, str)
+            else " + ".join(row_cols)
+        )
 
         plt.figure(figsize=figsize)
         sns.heatmap(ct, annot=True, cmap=cmap, fmt=".2f")
-        plt.xlabel(col2)
-        plt.ylabel(col1)
-        plt.title(f"Crosstab heatmap: {col1} vs {col2}")
+
+        plt.xlabel(col)
+        plt.ylabel(row_label)
+        plt.title(f"Crosstab heatmap: {row_label} vs {col}")
         plt.tight_layout()
         plt.show()
 
@@ -975,6 +1122,462 @@ class DataProfiler:
         for key, value in report.items():
             print(f"\n{'=' * 20} {key.upper()} {'=' * 20}")
             print(value)
+
+    def dataframe_summary_plot(self,
+        columns: Optional[Iterable[str]] = None,
+        max_features: Optional[int] = None,
+        feature_type: Literal['all', 'numeric', 'categorical'] = 'all',
+        bins: int = 20,
+        top_categories: int = 5,
+        # sample_size: Optional[int] = None,
+        figsize_per_feature: Tuple[float, float] = (12, 3),
+        title: str = "Dataset column summary",
+        title_fontsize: int = 18,
+        text_fontsize: int = 10,
+        label_max_len: int = 18,
+        text_max_len: int = 35,
+    ) -> None:
+
+        # if sample_size is not None and len(self.df) > sample_size:
+        #     df = self.df.sample(sample_size, random_state=SEED)
+
+        cols = self.df.columns
+
+        if feature_type == "numeric":
+            cols = self._numeric_cols
+        elif feature_type == "categorical":
+            cols = self._cat_cols
+        elif feature_type != "all":
+            raise ValueError('feature_type должен быть "numeric", "categorical" или "all"')
+
+        n_features = len(cols)
+
+        if max_features is not None and max_features <= self.df.shape[1]:
+            cols = cols[:max_features]
+            n_features = len(max_features)
+
+        if n_features == 0:
+            raise ValueError("Нет колонок для отображения")
+
+        fig_width = figsize_per_feature[0]
+        fig_height = figsize_per_feature[1] * n_features
+
+        fig = plt.figure(
+            figsize=(fig_width, fig_height),
+            constrained_layout=True
+        )
+
+        fig.suptitle(title, fontsize=title_fontsize, fontweight="bold")
+
+        gs = fig.add_gridspec(
+            nrows=n_features,
+            ncols=2,
+            width_ratios=[1.3, 1],
+        )
+
+        fig.set_constrained_layout_pads(hspace=0.2)
+
+        for i, col in enumerate(cols):
+            series = self.df[col]
+            valid = series.notna().sum()
+            missing = series.isna().sum()
+            total = len(series)
+            dtype = series.dtype
+
+            valid_pct = valid / total * 100 if total else 0
+            missing_pct = missing / total * 100 if total else 0
+
+            ax_plot = fig.add_subplot(gs[i, 0])
+            ax_text = fig.add_subplot(gs[i, 1])
+
+            ax_plot.set_title(col, loc="left", fontsize=13, fontweight="bold")
+
+            is_numeric = pd.api.types.is_numeric_dtype(series)
+
+            if is_numeric:
+                clean = series.dropna()
+
+                ax_plot.hist(clean, bins=bins)
+                ax_plot.set_yticks([])
+
+                if len(clean) > 0:
+                    mean = clean.mean()
+                    std = clean.std()
+                    q = clean.quantile([0, 0.25, 0.5, 0.75, 1])
+
+                    stats_text = (
+                        f"dtype: {dtype}\n"
+                        f"Valid: {valid} ({valid_pct:.1f}%)\n"
+                        f"Missing: {missing} ({missing_pct:.1f}%)\n\n"
+                        f"Mean: {mean:.4g}\n"
+                        f"Std. Deviation: {std:.4g}\n\n"
+                        f"Quantiles\n"
+                        f"Min: {q.loc[0]:.4g}\n"
+                        f"25%: {q.loc[0.25]:.4g}\n"
+                        f"50%: {q.loc[0.5]:.4g}\n"
+                        f"75%: {q.loc[0.75]:.4g}\n"
+                        f"Max: {q.loc[1]:.4g}"
+                    )
+                else:
+                    stats_text = (
+                        f"dtype: {dtype}\n"
+                        f"Valid: {valid} ({valid_pct:.1f}%)\n"
+                        f"Missing: {missing} ({missing_pct:.1f}%)"
+                    )
+
+            else:
+                clean = series.dropna().astype(str)
+                counts = clean.value_counts().head(top_categories)
+
+                ax_plot.bar(
+                    [self._shorten(x, label_max_len) for x in counts.index],
+                    counts.values
+                )
+                ax_plot.set_yticks([])
+                ax_plot.tick_params(axis="x", rotation=35)
+
+                top_values_text = "\n".join(
+                    [
+                        f"{self._shorten(idx, text_max_len)}: {count} ({count / total * 100:.1f}%)"
+                        for idx, count in counts.items()
+                    ]
+                )
+
+                stats_text = (
+                    f"dtype: {dtype}\n"
+                    f"Valid: {valid} ({valid_pct:.1f}%)\n"
+                    f"Missing: {missing} ({missing_pct:.1f}%)\n\n"
+                    f"Unique: {series.nunique(dropna=True)}\n\n"
+                    f"Top values\n"
+                    f"{top_values_text}"
+                )
+
+            for ax in [ax_plot, ax_text]:
+                ax.spines["right"].set_visible(False)
+                ax.spines["left"].set_visible(False)
+                ax.spines["bottom"].set_visible(False)
+
+            ax_plot.spines["top"].set_visible(False)
+
+            ax_text.set_xticks([])
+            ax_text.set_yticks([])
+            ax_text.spines["top"].set_visible(True)
+            # ax_text.spines["top"].set_linewidth(4)
+
+            ax_text.text(
+                0.0,
+                0.92,
+                stats_text,
+                va="top",
+                ha="left",
+                fontsize=text_fontsize,
+                family="monospace",
+                transform=ax_text.transAxes,
+            )
+
+        plt.show()
+
+    @staticmethod
+    def _shorten(x: str, max_len: int = 28):
+        x = str(x)
+        return x if len(x) <= max_len else x[:max_len] + "..."
+
+    def _is_corr_compatible(self, col: str) -> bool:
+        self._check_col(col)
+        s = self.df[col]
+
+        if pd.api.types.is_bool_dtype(s):
+            return True
+
+        if pd.api.types.is_numeric_dtype(s):
+            return True
+
+        return False
+
+    def is_numeric_as_categorical(self, col: str) -> bool:
+        self._check_col(col)
+
+        s = self.df[col]
+
+        return (
+                pd.api.types.is_numeric_dtype(s)
+                and s.nunique(dropna=True) <= NUMERIC_AS_CATEGORICAL_MAX_UNIQUE
+        )
+
+    def get_col_plot_roles(self, col: str) -> set[str]:
+        col_type = self.get_col_type(col)
+
+        roles = set()
+
+        if col_type == "numeric":
+            roles.add("numeric")
+
+        if col_type in ("categorical", "boolean", "high_cardinality"):
+            roles.add("categorical")
+
+        if self.is_numeric_as_categorical(col):
+            roles.add("categorical")
+
+        return roles
+
+    def plot_feature_distribution(
+            self,
+            col: str,
+            bins: int = 30,
+            kde: bool = True,
+            figsize=(6, 4),
+    ):
+        """
+        Распределение признака с разбиением по target.
+
+        numeric -> histplot + hue
+        categorical -> countplot + hue
+        """
+        self._check_col(col)
+        self._check_target()
+
+        col_type = self.get_col_type(col)
+
+        plt.figure(figsize=figsize)
+
+        # 🔹 numeric
+        if col_type == "numeric":
+            sns.histplot(
+                data=self.df,
+                x=col,
+                hue=self.target,
+                bins=bins,
+                kde=kde,
+                stat="density",
+                common_norm=False,
+            )
+            plt.xlabel(col)
+            plt.ylabel("Density")
+            plt.title(f"{col} distribution by {self.target}")
+
+        # 🔹 categorical
+        else:
+            order = self.df[col].value_counts().index
+
+            sns.countplot(
+                data=self.df,
+                x=col,
+                hue=self.target,
+                order=order,
+            )
+
+            plt.xticks(rotation=45, ha="right")
+            plt.xlabel(col)
+            plt.ylabel("Count")
+            plt.title(f"{col} vs {self.target}")
+
+        plt.tight_layout()
+        plt.show()
+
+    def feature_mutual_info(self, X: pd.DataFrame, y: pd.Series) -> pd.Series:
+        """
+        Оценка нелинейной зависимости feature → target через mutual information.
+        Возвращает Series с MI по каждому признаку.
+        """
+        X = X.copy()
+        pre = build_matual_info_preprocessor(X)
+        X_ready = pre.fit_transform(X)
+
+        features = X.columns.tolist()
+
+        discrete_features = [
+            self.get_col_type(col) in ["categorical", "boolean"]
+            for col in features
+        ]
+
+        mi = mutual_info_classif(X_ready, y, discrete_features=discrete_features, random_state=SEED)
+        return pd.Series(mi, index=features).sort_values(ascending=False)
+
+    def feature_ablation(
+            self,
+            model,
+            base_model_score,
+            X: pd.DataFrame,
+            y: pd.Series,
+            feature: str,
+            cv: int = 5,
+            scoring: str = "accuracy",
+            transform_off: bool = False
+    ) -> float:
+        """
+        Возвращает delta = score(all_features) - score(without_feature).
+        > 0 — признак полезен, ≈0 — нейтрален, < 0 — вредный.
+        """
+
+        if feature not in X.columns:
+            raise ValueError(f"Feature '{feature}' not in X")
+
+        X_drop = X.drop(columns=[feature])
+        ablation_model = model('logreg', X_drop, transform_off=transform_off)
+        drop_mean, _, _ = cv_scores(ablation_model, X_drop, y, n_splits=cv, scoring=scoring)
+        return base_model_score - drop_mean
+
+    def feature_ablation_all(
+            self,
+            model,
+            X: pd.DataFrame,
+            y: pd.Series,
+            cv: int = 5,
+            scoring: str = "accuracy",
+            transform_off: bool = False
+    ) -> pd.Series:
+        deltas = {}
+
+        base_model = model('logreg', X, transform_off=transform_off)
+        base_model_score, _, _ = cv_scores(base_model, X, y, n_splits=cv, scoring=scoring)
+
+        for f in X.columns:
+            deltas[f] = self.feature_ablation(model, base_model_score, X, y, feature=f, cv=cv, scoring=scoring, transform_off=transform_off)
+        return pd.Series(deltas).sort_values(ascending=False)
+
+    def feature_permutation_importance(
+            self,
+            model,
+            X_val: pd.DataFrame,
+            y_val: pd.Series,
+            n_repeats: int = 10,
+            scoring: str | None = None,
+            random_state: int = SEED,
+    ) -> pd.DataFrame:
+        """
+        Перестановочная важность признаков на валидации.
+        Возвращает DataFrame: mean, std по каждому признаку.
+        """
+        perm_model = model('logreg', X_val, transform_off=True)
+        perm_model.fit(X_val, y_val)
+        r = permutation_importance(
+            perm_model,
+            X_val,
+            y_val,
+            n_repeats=n_repeats,
+            scoring=scoring,
+            random_state=random_state,
+        )
+        imp_mean = pd.Series(r.importances_mean, index=X_val.columns, name="importance_mean")
+        imp_std = pd.Series(r.importances_std, index=X_val.columns, name="importance_std")
+        df_imp = pd.concat([imp_mean, imp_std], axis=1).sort_values("importance_mean", ascending=False)
+        return df_imp
+
+    def feature_report(
+            self,
+            model: Callable,
+            X: pd.DataFrame,
+            y: pd.Series,
+            X_val: pd.DataFrame | None = None,
+            y_val: pd.Series | None = None,
+            cv: int = 5,
+            scoring: str = "accuracy",
+            transform_off: bool = False
+    ) -> dict[str, pd.DataFrame | pd.Series]:
+        """
+        Комплексный отчёт:
+        - mutual information
+        - ablation (по CV)
+        - permutation importance (если есть валидация)
+        """
+        report = {}
+        mutual_model = model('logreg', X, transform_off=transform_off)
+        if not transform_off:
+            X_fe = mutual_model['feat'].transform(X)
+        else:
+            X_fe = X.copy()
+
+        report["mutual_info"] = self.feature_mutual_info(X_fe, y)
+        report["ablation"] = self.feature_ablation_all(model, X_fe, y, cv=cv, scoring=scoring, transform_off=transform_off)
+
+        if X_val is not None and y_val is not None:
+            report["permutation"] = self.feature_permutation_importance(
+                model, X_val, y_val
+            )
+
+        return report
+
+    def test_feature_removal_combinations(
+            self,
+            estimator: Callable,
+            X,
+            y,
+            candidate_cols,
+            scoring="accuracy",
+            verbose=True
+    ):
+        """
+        Перебирает ВСЕ комбинации признаков для удаления и оценивает качество модели.
+        """
+
+        if not isinstance(X, pd.DataFrame):
+            raise TypeError("X должен быть pandas DataFrame")
+
+        candidate_cols = list(candidate_cols)
+
+        missing_cols = [col for col in candidate_cols if col not in X.columns]
+        if missing_cols:
+            raise ValueError(f"Этих колонок нет в X: {missing_cols}")
+
+        # считаем количество комбинаций
+        total_combinations = sum(
+            comb(len(candidate_cols), k)
+            for k in range(1, len(candidate_cols) + 1)
+        )
+
+        if verbose:
+            print(f"Кандидаты на удаление: {candidate_cols}")
+            print(f"Всего комбинаций: {total_combinations}")
+
+        # baseline
+        baseline_model = estimator('logreg', X, transform_off=True)
+        baseline_mean,  baseline_std, _ = cv_scores(baseline_model, X, y, scoring=scoring)
+
+        results = list()
+
+        results.append({
+            "removed_features": tuple(),
+            "n_removed": 0,
+            "score_mean": baseline_mean,
+            "score_std": baseline_std,
+            "delta_vs_baseline": 0.0
+        })
+
+        counter = 0
+
+        # полный перебор
+        for k in range(1, len(candidate_cols) + 1):
+            for cols_to_drop in combinations(candidate_cols, k):
+                counter += 1
+
+                X_reduced = X.drop(columns=list(cols_to_drop))
+                model = estimator('logreg', X_reduced, transform_off=True)
+                score_mean,  score_std, _ = cv_scores(model, X_reduced, y, scoring=scoring)
+
+                results.append({
+                    "removed_features": cols_to_drop,
+                    "n_removed": k,
+                    "score_mean": score_mean,
+                    "score_std": score_std,
+                    "delta_vs_baseline": score_mean - baseline_mean
+                })
+
+                if verbose:
+                    print(
+                        f"[{counter}/{total_combinations}] "
+                        f"drop={cols_to_drop} | "
+                        f"score={score_mean:.5f} | "
+                        f"delta={score_mean - baseline_mean:+.5f}"
+                    )
+
+        results_df = pd.DataFrame(results)
+
+        results_df = results_df.sort_values(
+            by="score_mean",
+            ascending=False
+        ).reset_index(drop=True)
+
+        return results_df
 
 
 

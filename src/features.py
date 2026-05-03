@@ -1,14 +1,28 @@
 import pandas as pd
 import numpy as np
 from .config import NOISE_FEATURES, DROP_SIBSP_PARCH
+from sklearn.base import BaseEstimator, TransformerMixin
 
 
 class TitanicFeatures:
     """Feature engineering для датасета Titanic."""
 
-    def __init__(self, drop_noise: bool = True, drop_sibsp_parch: bool = DROP_SIBSP_PARCH):
+    def __init__(
+            self, drop_noise: bool = True,
+            drop_sibsp_parch: bool = DROP_SIBSP_PARCH,
+            use_log_fare: bool = True,
+            use_age_bins: bool = False,
+            use_fare_bins: bool = False,
+            use_pclass_sex: bool = False,
+            model_type: str = "linear"
+    ):
         self.drop_noise = drop_noise
         self.drop_sibsp_parch = drop_sibsp_parch
+        self.use_log_fare = use_log_fare
+        self.use_age_bins = use_age_bins
+        self.use_fare_bins = use_fare_bins
+        self.use_pclass_sex = use_pclass_sex
+        self.model_type = model_type
 
     # --- Внутренние шаги из ноутбука -----------------------------------------
 
@@ -59,6 +73,40 @@ class TitanicFeatures:
         df["Pclass_Sex"] =df["Pclass"] * df["Sex"]
         return df
 
+    def _add_log_fare_feature(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Логарифмирует Fare для уменьшения асимметрии распределения."""
+        df["Log_Fare"] = np.log1p(df["Fare"])
+        return df
+
+    def _bin_age_feature(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Разбиваем Age на группы"""
+        df["Age_bin"] = pd.cut(df["Age"], bins=[0, 12, 18, 40, 60, 100], labels=False)
+        return df
+
+    def _bin_fare_feature(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Разбиваем Fare на группы"""
+        df["Fare_bin"] = pd.qcut(df["Fare"], q=4, labels=False)
+        return df
+
+    def _transform_fare_log(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Логарифмирует Fare на месте для уменьшения асимметрии."""
+        df["Fare"] = np.log1p(df["Fare"])
+        return df
+
+    def _drop_noise_features(self, df: pd.DataFrame, features: list[str]) -> pd.DataFrame:
+        for col in features:
+            if col in df.columns:
+                df.drop(columns=col, inplace=True)
+        return df
+
+    def _drop_age_feature(self, df: pd.DataFrame) -> pd.DataFrame:
+        df.drop(columns=["Age"], inplace=True)
+        return df
+
+    def _drop_fare_feature(self, df: pd.DataFrame) -> pd.DataFrame:
+        df.drop(columns=["Fare"], inplace=True)
+        return df
+
     # def _add_group_by_pclass_and_embarked(self, df: pd.DataFrame) -> pd.DataFrame:
     #     df["autoFE_f_5_manual"] = (
     #         df["Pclass"]
@@ -88,9 +136,20 @@ class TitanicFeatures:
         df = self._add_ticket_prefix(df)
         df = self._add_cabin_deck(df)
         df = self._encode_sex(df)
-        # df = self._add_pclass_sex_feature(df)
-        # df = self._add_group_by_pclass_and_embarked(df)
-        # df = self._add_group_by_fare_and_age_std(df)
+
+        if self.use_log_fare:
+            df = self._transform_fare_log(df)
+
+        if self.use_age_bins:
+            df = self._bin_age_feature(df)
+            df = self._drop_age_feature(df)
+
+        if self.use_fare_bins:
+            df = self._bin_fare_feature(df)
+            df = self._drop_fare_feature(df)
+
+        if self.use_pclass_sex:
+            df = self._add_pclass_sex_feature(df)
 
         # Удаляем сильно сырьевые / ID колонки
         for col in ["PassengerId", "Name", "Ticket", "Cabin"]:
@@ -99,7 +158,7 @@ class TitanicFeatures:
 
         # Удаляем шумные фичи, которые в ноутбуке ухудшали/не улучшали score [file:1]
         if self.drop_noise:
-            for col in NOISE_FEATURES:
+            for col in ["TicketPrefix","ticketgroupsize", "CabinDeck"]: #["TicketPrefix","Fare_bin", "Pclass"]
                 if col in df.columns:
                     df.drop(columns=col, inplace=True)
 
@@ -110,3 +169,10 @@ class TitanicFeatures:
                     df.drop(columns=col, inplace=True)
 
         return df
+
+class TitanicFeaturesTransformer(TitanicFeatures, BaseEstimator, TransformerMixin):
+    """Sklearn-совместимый wrapper над TitanicFeatures."""
+
+    def fit(self, X, y=None):
+        # Stateful-логики пока нет, просто возвращаем self
+        return self
