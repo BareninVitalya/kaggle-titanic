@@ -2,11 +2,11 @@
 from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
 from sklearn.base import clone
 from scipy.stats import loguniform
-from .tuning_objectives import LogregObjective, KNNObjective, TreeObjective, RFObjective, CatBoostObjective
+from .tuning_objectives import LogregObjective, KNNObjective, TreeObjective, RFObjective, CatBoostObjective, XGBObjective, LGBMObjective
 import optuna
-
+from .logging_utils import log_experiment
 from .modeling import build_model
-from .config import RANDOM_SEARCH_SPACE, SEED
+from .config import RANDOM_SEARCH_SPACE, SEED, N_SPLITS
 
 def tune_with_random_search(
     model_name: str,
@@ -19,7 +19,7 @@ def tune_with_random_search(
 ):
     base_model = build_model(model_name, X, params=base_params, transform_off=True)
 
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
+    cv = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=random_state)
 
     param_distributions = RANDOM_SEARCH_SPACE[model_name]
 
@@ -47,7 +47,9 @@ def tune_with_optuna(
     n_trials: int = 50,
     scoring: str = "accuracy",
     random_state: int = SEED,
-    transform_off: bool = True
+    transform_off: bool = True,
+    log_trials: bool = True,
+    logfile: str = "optuna.log",
 ):
     if model_name == 'knn':
         objective_class = KNNObjective
@@ -57,6 +59,10 @@ def tune_with_optuna(
         objective_class = RFObjective
     elif model_name in ("catboost", "cat"):
         objective_class = CatBoostObjective
+    elif model_name in ("xgboost", "xgb"):
+        objective_class = XGBObjective
+    elif model_name == "lgbm":
+        objective_class = LGBMObjective
     # elif model_name == 'logreg':
     else:
         base_params = base_params or {}
@@ -65,9 +71,9 @@ def tune_with_optuna(
 
 
     base_model = build_model(model_name, X, params=base_params, transform_off=transform_off)
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
+    cv = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=random_state)
 
-    objective = objective_class(base_model, X, y, cv)
+    objective = objective_class(base_model, X, y, cv, log_trials=log_trials)
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(
@@ -80,4 +86,15 @@ def tune_with_optuna(
 
     best_model.set_params(**study.best_trial.params)
     best_model.fit(X, y)
+
+    log_experiment(
+        name=f"optuna_{model_name}_best",
+        score=float(study.best_value),
+        std=0.0,
+        params=study.best_trial.params,
+        col_names=X.columns.tolist() if hasattr(X, "columns") else [],
+        logfile=logfile,
+        print_log=False,
+    )
+
     return best_model, study

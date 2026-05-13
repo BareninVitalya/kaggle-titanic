@@ -1,13 +1,20 @@
 from sklearn.base import clone
 from sklearn.model_selection import cross_val_score
+from .logging_utils import log_experiment
 
 
 class LogregObjective:
-    def __init__(self, base_model, X, y, cv, step_name=None):
+    def __init__(self, base_model, X, y, cv, step_name=None, scoring: str = 'accuracy',
+        log_trials: bool = False,
+        logfile: str = "optuna.log"
+    ):
         self.base_model = base_model
         self.X = X
         self.y = y
         self.cv = cv
+        self.log_trials = log_trials
+        self.logfile = logfile
+        self.scoring = scoring
 
         if step_name is None:
             self.step_name = base_model.steps[-1][0]
@@ -27,17 +34,29 @@ class LogregObjective:
         model.set_params(**params)
 
         scores = cross_val_score(
-            model, self.X, self.y, cv=self.cv, scoring="accuracy", n_jobs=-1
+            model, self.X, self.y, cv=self.cv, scoring=self.scoring, n_jobs=-1
         )
+        mean_score = float(scores.mean())
+        std_score = float(scores.std())
+
+        if self.log_trials:
+            _log_optuna_trial(trial, scores, self.X, "logreg", self.logfile)
+
         return scores.mean()
 
 
 class KNNObjective:
-    def __init__(self, base_model, X, y, cv, step_name=None):
+    def __init__(self, base_model, X, y, cv, step_name=None, scoring: str = 'accuracy',
+                 log_trials: bool = False,
+                 logfile: str = "optuna.log"
+                 ):
         self.base_model = base_model
         self.X = X
         self.y = y
         self.cv = cv
+        self.log_trials = log_trials
+        self.logfile = logfile
+        self.scoring = scoring
 
         if step_name is None:
             self.step_name = base_model.steps[-1][0]
@@ -56,18 +75,27 @@ class KNNObjective:
         model.set_params(**params)
 
         scores = cross_val_score(
-            model, self.X, self.y, cv=self.cv, scoring="accuracy", n_jobs=-1
+            model, self.X, self.y, cv=self.cv, scoring=self.scoring, n_jobs=-1
         )
+
+        if self.log_trials:
+            _log_optuna_trial(trial, scores, self.X, "knn", self.logfile)
 
         return scores.mean()
 
 class TreeObjective:
-    def __init__(self, base_model, X, y, cv, step_name=None, scoring="accuracy"):
+    def __init__(self, base_model, X, y, cv, step_name=None, scoring: str = 'accuracy',
+        log_trials: bool = False,
+        logfile: str = "optuna.log"
+    ):
         self.base_model = base_model
         self.X = X
         self.y = y
         self.cv = cv
+        self.log_trials = log_trials
+        self.logfile = logfile
         self.scoring = scoring
+
 
         if step_name is None:
             self.step_name = base_model.steps[-1][0]
@@ -97,15 +125,23 @@ class TreeObjective:
             model, self.X, self.y, cv=self.cv, scoring="accuracy", n_jobs=-1
         )
 
+        if self.log_trials:
+            _log_optuna_trial(trial, scores, self.X, "tree", self.logfile)
+
         return scores.mean()
 
 
 class RFObjective:
-    def __init__(self, base_model, X, y, cv, step_name=None, scoring="accuracy"):
+    def __init__(self, base_model, X, y, cv, step_name=None, scoring: str = 'accuracy',
+        log_trials: bool = False,
+        logfile: str = "optuna.log"
+    ):
         self.base_model = base_model
         self.X = X
         self.y = y
         self.cv = cv
+        self.log_trials = log_trials
+        self.logfile = logfile
         self.scoring = scoring
 
         if step_name is None:
@@ -132,14 +168,22 @@ class RFObjective:
             model, self.X, self.y, cv=self.cv, scoring="accuracy", n_jobs=-1
         )
 
+        if self.log_trials:
+            _log_optuna_trial(trial, scores, self.X, "tf", self.logfile)
+
         return scores.mean()
 
 class CatBoostObjective:
-    def __init__(self, base_model, X, y, cv, step_name=None, scoring="accuracy"):
+    def __init__(self, base_model, X, y, cv, step_name=None, scoring: str = 'accuracy',
+        log_trials: bool = False,
+        logfile: str = "optuna.log"
+    ):
         self.base_model = base_model
         self.X = X
         self.y = y
         self.cv = cv
+        self.log_trials = log_trials
+        self.logfile = logfile
         self.scoring = scoring
         self.step_name = step_name or base_model.steps[-1][0]
 
@@ -173,4 +217,174 @@ class CatBoostObjective:
             n_jobs=-1
         )
 
+        if self.log_trials:
+            _log_optuna_trial(trial, scores, self.X, "tf", self.logfile)
+
         return scores.mean()
+
+class XGBObjective:
+    def __init__(
+        self,
+        base_model,
+        X,
+        y,
+        cv,
+        step_name=None,
+        scoring: str = "accuracy",
+        log_trials: bool = False,
+        logfile: str = "optuna.log",
+    ):
+        self.base_model = base_model
+        self.X = X
+        self.y = y
+        self.cv = cv
+        self.log_trials = log_trials
+        self.logfile = logfile
+        self.scoring = scoring
+
+        if step_name is None:
+            self.step_name = base_model.steps[-1][0]
+        else:
+            self.step_name = step_name
+
+    def __call__(self, trial):
+        params = {
+            f"{self.step_name}__n_estimators": trial.suggest_int(
+                "model__n_estimators", 100, 700, step=100
+            ),
+            f"{self.step_name}__max_depth": trial.suggest_int(
+                "model__max_depth", 2, 8
+            ),
+            f"{self.step_name}__learning_rate": trial.suggest_float(
+                "model__learning_rate", 0.01, 0.3, log=True
+            ),
+            f"{self.step_name}__min_child_weight": trial.suggest_int(
+                "model__min_child_weight", 1, 10
+            ),
+            f"{self.step_name}__subsample": trial.suggest_float(
+                "model__subsample", 0.6, 1.0
+            ),
+            f"{self.step_name}__colsample_bytree": trial.suggest_float(
+                "model__colsample_bytree", 0.6, 1.0
+            ),
+            f"{self.step_name}__reg_alpha": trial.suggest_float(
+                "model__reg_alpha", 1e-3, 10.0, log=True
+            ),
+            f"{self.step_name}__reg_lambda": trial.suggest_float(
+                "model__reg_lambda", 1e-3, 10.0, log=True
+            ),
+        }
+
+        model = clone(self.base_model)
+        model.set_params(**params)
+
+        scores = cross_val_score(
+            model,
+            self.X,
+            self.y,
+            cv=self.cv,
+            scoring=self.scoring,
+            n_jobs=-1,
+        )
+
+        if self.log_trials:
+            _log_optuna_trial(trial, scores, self.X, "xgb", self.logfile)
+
+        return scores.mean()
+
+class LGBMObjective:
+    def __init__(
+        self,
+        base_model,
+        X,
+        y,
+        cv,
+        step_name=None,
+        scoring: str = "accuracy",
+        log_trials: bool = False,
+        logfile: str = "optuna.log",
+    ):
+        self.base_model = base_model
+        self.X = X
+        self.y = y
+        self.cv = cv
+        self.log_trials = log_trials
+        self.logfile = logfile
+        self.scoring = scoring
+
+        if step_name is None:
+            self.step_name = base_model.steps[-1][0]
+        else:
+            self.step_name = step_name
+
+    def __call__(self, trial):
+        params = {
+            # число деревьев (итерации бустинга)
+            f"{self.step_name}__n_estimators": trial.suggest_int(
+                "model__n_estimators", 100, 700, step=100
+            ),
+            # сложность дерева: num_leaves + max_depth
+            f"{self.step_name}__num_leaves": trial.suggest_int(
+                "model__num_leaves", 15, 63
+            ),
+            f"{self.step_name}__max_depth": trial.suggest_int(
+                "model__max_depth", -1, 10
+            ),
+            # скорость обучения
+            f"{self.step_name}__learning_rate": trial.suggest_float(
+                "model__learning_rate", 0.01, 0.3, log=True
+            ),
+            # регуляризация структуры дерева
+            f"{self.step_name}__min_child_samples": trial.suggest_int(
+                "model__min_child_samples", 5, 40
+            ),
+            # семплинг объектов и признаков
+            f"{self.step_name}__subsample": trial.suggest_float(
+                "model__subsample", 0.6, 1.0
+            ),
+            f"{self.step_name}__colsample_bytree": trial.suggest_float(
+                "model__colsample_bytree", 0.6, 1.0
+            ),
+            # L1/L2‑регуляризация листьев
+            f"{self.step_name}__reg_alpha": trial.suggest_float(
+                "model__reg_alpha", 1e-3, 10.0, log=True
+            ),
+            f"{self.step_name}__reg_lambda": trial.suggest_float(
+                "model__reg_lambda", 1e-3, 10.0, log=True
+            ),
+        }
+
+        model = clone(self.base_model)
+        model.set_params(**params)
+
+        scores = cross_val_score(
+            model,
+            self.X,
+            self.y,
+            cv=self.cv,
+            scoring=self.scoring,
+            n_jobs=-1,
+        )
+
+        if self.log_trials:
+            _log_optuna_trial(trial, scores, self.X, "lgbm", self.logfile)
+
+        return scores.mean()
+
+
+def _log_optuna_trial(
+    trial,
+    scores,
+    X,
+    model_name: str,
+    logfile: str = "optuna.log",
+):
+    log_experiment(
+        name=f"optuna_{model_name}_trial_{trial.number}",
+        score=float(scores.mean()),
+        std=float(scores.std()),
+        params=trial.params,
+        col_names=X.columns.tolist() if hasattr(X, "columns") else [],
+        logfile=logfile,
+        print_log=False,
+    )

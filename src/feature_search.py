@@ -2,10 +2,9 @@ import pickle
 from pathlib import Path
 
 import pandas as pd
-import numpy as np
 from openfe import OpenFE, transform
 
-from .config import MODELS_DIR, SEED
+from .config import SEED
 from .evaluate import cv_scores
 from .modeling import build_model
 
@@ -86,7 +85,7 @@ def ablation_openfe(
     Поэтапно добавляет признаки (шаг step) и смотрит как меняется CV score.
     Позволяет найти оптимальное кол-во OFE-признаков.
     """
-    base_score, base_std, _ = cv_scores(build_model(model_name, X_base, transform_off=True), X_base, y)
+    base_score, base_std, *_ = cv_scores(build_model(model_name, X_base, transform_off=True), X_base, y)
 
     rows = [{"n_features": 0, "mean": base_score, "std": base_std, "delta": 0.0}]
 
@@ -95,7 +94,7 @@ def ablation_openfe(
     for n in range(step, len(ofe_cols) + 1, step):
         cols_to_add = ofe_cols[:n]
         X_exp = pd.concat([X_base, X_with_ofe[cols_to_add]], axis=1)
-        mean, std, _ = cv_scores(build_model(model_name, X_exp, transform_off=True), X_exp, y)
+        mean, std, *_ = cv_scores(build_model(model_name, X_exp, transform_off=True), X_exp, y)
         rows.append({
             "n_features": n,
             "mean": mean,

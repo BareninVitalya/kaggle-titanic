@@ -104,7 +104,7 @@ class OpenFEStage:
         ofe_cols: list[str],
     ) -> list[str]:
         current_X = X_base.copy()
-        current_score, _, _ = cv_scores(
+        current_score, *_ = cv_scores(
             build_model(self.model_name, current_X, transform_off=True), current_X, y
         )
         selected: list[str] = []
@@ -113,7 +113,7 @@ class OpenFEStage:
         per_feat: list[dict] = []
         for col in ofe_cols:
             cand_X = pd.concat([X_base, X_with_ofe[[col]]], axis=1)
-            mean, std, _ = cv_scores(
+            mean, std, *_ = cv_scores(
                 build_model(self.model_name, cand_X, transform_off=True), cand_X, y
             )
             per_feat.append({
@@ -126,7 +126,7 @@ class OpenFEStage:
         for row in sorted_feats:
             col = row["col"]
             cand_X = pd.concat([current_X, X_with_ofe[[col]]], axis=1)
-            mean, std, _ = cv_scores(
+            mean, std, *_ = cv_scores(
                 build_model(self.model_name, cand_X, transform_off=True), cand_X, y
             )
             delta = mean - current_score
@@ -154,7 +154,7 @@ class OpenFEStage:
         y: pd.Series,
         ofe_cols: list[str],
     ) -> pd.DataFrame:
-        base_score, base_std, _ = cv_scores(
+        base_score, base_std, *_ = cv_scores(
             build_model(self.model_name, X_base, transform_off=True), X_base, y
         )
         rows = [{"n_features": 0, "mean": base_score,
@@ -163,7 +163,7 @@ class OpenFEStage:
         for n in range(self.ablation_step, len(ofe_cols) + 1, self.ablation_step):
             cols_batch = ofe_cols[:n]
             X_exp = pd.concat([X_base, X_with_ofe[cols_batch]], axis=1)
-            mean, std, _ = cv_scores(
+            mean, std, *_ = cv_scores(
                 build_model(self.model_name, X_exp, transform_off=True), X_exp, y
             )
             rows.append({

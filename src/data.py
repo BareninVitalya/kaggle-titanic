@@ -1,7 +1,9 @@
+"""Функции для загрузки исходных и сохранения обработанных данных проекта."""
+
 from pathlib import Path
 import pandas as pd
 
-from .config import TRAIN_PATH, TEST_PATH, PROCESSED_DATA_DIR
+from .config import PROCESSED_DATA_DIR, TEST_PATH, TRAIN_PATH
 
 
 def load_train() -> pd.DataFrame:

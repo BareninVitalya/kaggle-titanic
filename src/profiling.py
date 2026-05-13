@@ -10,7 +10,12 @@ from itertools import combinations
 from math import comb
 import pandas as pd
 from sklearn.base import clone
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import StratifiedKFold, learning_curve
+from .logging_utils import log_experiment
+
+from .config import SEED, N_SPLITS
+
+
 
 from pandas.api.types import (
     is_bool_dtype,
@@ -1414,7 +1419,7 @@ class DataProfiler:
 
         X_drop = X.drop(columns=[feature])
         ablation_model = model('logreg', X_drop, transform_off=transform_off)
-        drop_mean, _, _ = cv_scores(ablation_model, X_drop, y, n_splits=cv, scoring=scoring)
+        _, drop_mean, *_ = cv_scores(ablation_model, X_drop, y, n_splits=cv, scoring=scoring)
         return base_model_score - drop_mean
 
     def feature_ablation_all(
@@ -1429,7 +1434,7 @@ class DataProfiler:
         deltas = {}
 
         base_model = model('logreg', X, transform_off=transform_off)
-        base_model_score, _, _ = cv_scores(base_model, X, y, n_splits=cv, scoring=scoring)
+        _, base_model_score, *_ = cv_scores(base_model, X, y, n_splits=cv, scoring=scoring)
 
         for f in X.columns:
             deltas[f] = self.feature_ablation(model, base_model_score, X, y, feature=f, cv=cv, scoring=scoring, transform_off=transform_off)
@@ -1504,7 +1509,9 @@ class DataProfiler:
             y,
             candidate_cols,
             scoring="accuracy",
-            verbose=True
+            verbose=True,
+            log: bool = True,
+            logfile: str = "feature_removal.log",
     ):
         """
         Перебирает ВСЕ комбинации признаков для удаления и оценивает качество модели.
@@ -1531,7 +1538,7 @@ class DataProfiler:
 
         # baseline
         baseline_model = estimator('logreg', X, transform_off=True)
-        baseline_mean,  baseline_std, _ = cv_scores(baseline_model, X, y, scoring=scoring)
+        baseline_mean,  baseline_std, *_ = cv_scores(baseline_model, X, y, scoring=scoring)
 
         results = list()
 
@@ -1543,6 +1550,17 @@ class DataProfiler:
             "delta_vs_baseline": 0.0
         })
 
+        if log:
+            log_experiment(
+                name="feat_removal: baseline",
+                score=baseline_mean,
+                std=baseline_std,
+                params={"removed_features": [], "scoring": scoring},
+                col_names=X.columns.tolist(),
+                logfile=logfile,
+                print_log=False,
+            )
+
         counter = 0
 
         # полный перебор
@@ -1552,7 +1570,7 @@ class DataProfiler:
 
                 X_reduced = X.drop(columns=list(cols_to_drop))
                 model = estimator('logreg', X_reduced, transform_off=True)
-                score_mean,  score_std, _ = cv_scores(model, X_reduced, y, scoring=scoring)
+                score_mean,  score_std, *_ = cv_scores(model, X_reduced, y, scoring=scoring)
 
                 results.append({
                     "removed_features": cols_to_drop,
@@ -1569,6 +1587,21 @@ class DataProfiler:
                         f"score={score_mean:.5f} | "
                         f"delta={score_mean - baseline_mean:+.5f}"
                     )
+                if log:
+                    remaining_cols = [c for c in X.columns if c not in cols_to_drop]
+                    log_experiment(
+                        name=f"feat_removal: drop={','.join(cols_to_drop)}",
+                        score=score_mean,
+                        std=score_std,
+                        params={
+                            "removed_features": list(cols_to_drop),
+                            "n_removed": k,
+                            "scoring": scoring,
+                        },
+                        col_names=remaining_cols,
+                        logfile=logfile,
+                        print_log=False,
+                    )
 
         results_df = pd.DataFrame(results)
 
@@ -1579,6 +1612,193 @@ class DataProfiler:
 
         return results_df
 
+    def plot_learning_curve(
+        self,
+        model,
+        X,
+        y,
+        n_splits: int = N_SPLITS,
+        seed: int = SEED,
+        scoring: str = "accuracy",
+        train_sizes: np.ndarray | None = None,
+        title: str | None = None,
+    ) -> None:
+        """Строит learning curve и ничего не возвращает."""
+        if train_sizes is None:
+            train_sizes = np.linspace(0.1, 1.0, 5)
+
+        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+
+        train_sizes_abs, train_scores, val_scores = learning_curve(
+            estimator=model,
+            X=X,
+            y=y,
+            cv=cv,
+            scoring=scoring,
+            train_sizes=train_sizes,
+            n_jobs=-1,
+            shuffle=True,
+            random_state=seed,
+        )
+
+        train_mean = train_scores.mean(axis=1)
+        train_std = train_scores.std(axis=1)
+        val_mean = val_scores.mean(axis=1)
+        val_std = val_scores.std(axis=1)
+
+        plt.figure(figsize=(8, 5))
+
+        if title is not None:
+            plt.title(title)
+
+        plt.plot(train_sizes_abs, train_mean, label="train", color="tab:blue")
+        plt.fill_between(
+            train_sizes_abs,
+            train_mean - train_std,
+            train_mean + train_std,
+            alpha=0.2,
+            color="tab:blue",
+        )
+
+        plt.plot(train_sizes_abs, val_mean, label="validation", color="tab:orange")
+        plt.fill_between(
+            train_sizes_abs,
+            val_mean - val_std,
+            val_mean + val_std,
+            alpha=0.2,
+            color="tab:orange",
+        )
+
+        plt.xlabel("Размер обучающей выборки")
+        plt.ylabel(scoring)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+    def plot_learning_curve_from_cv(
+        self,
+        train_scores: np.ndarray,
+        val_scores: np.ndarray,
+        title: str = "Learning curve (по фолдам)",
+        ylim: tuple[float, float] | None = None,
+    ) -> None:
+        """
+        Рисует простую learning curve по результатам cross_validate.
+
+        train_scores: массив train_score по фолдам (result["train_score"])
+        val_scores:   массив val_score   по фолдам (result["test_score"])
+        """
+        n_folds = len(val_scores)
+        folds = np.arange(1, n_folds + 1)
+
+        plt.figure(figsize=(6, 4))
+        plt.plot(folds, train_scores, "o-", color="tab:blue", label="Train score")
+        plt.plot(folds, val_scores, "o-", color="tab:orange", label="CV score")
+
+        if ylim is not None:
+            plt.ylim(*ylim)
+
+        plt.xlabel("Fold")
+        plt.ylabel("Score")
+        plt.title(title)
+        plt.xticks(folds)
+        plt.grid(True, alpha=0.3)
+        plt.legend(loc="best")
+        plt.tight_layout()
+        plt.show()
+
+    def plot_age_median_by_title(self) -> None:
+        df = self.df.copy()
+        medians = (
+            df
+            .groupby("Title")["Age"]
+            .median()
+            .reset_index()
+            .sort_values("Age")
+        )
+
+        plt.figure(figsize=(6, 4))
+        sns.barplot(data=medians, x="Title", y="Age", palette="Blues_d")
+        plt.ylabel("Median Age")
+        plt.xlabel("Title")
+        plt.title("Median Age by Title")
+        plt.tight_layout()
+        plt.show()
+
+    def plot_training_history(
+            self,
+            history: dict,
+            metric: str = "loss",
+            title: str | None = None,
+            figsize: tuple[int, int] = (8, 5),
+    ) -> None:
+        """
+        Рисует train/val кривую по эпохам.
+
+        history ожидается в формате:
+        {
+            "train_loss": [...],
+            "val_loss": [...],
+            "train_acc": [...],
+            "val_acc": [...]
+        }
+
+        metric: "loss" или "acc"
+        """
+        train_key = f"train_{metric}"
+        val_key = f"val_{metric}"
+
+        if train_key not in history:
+            raise ValueError(f"'{train_key}' not found in history")
+
+        train_values = history[train_key]
+        val_values = history.get(val_key, None)
+
+        epochs = np.arange(1, len(train_values) + 1)
+
+        plt.figure(figsize=figsize)
+        plt.plot(epochs, train_values, "o-", label=f"train_{metric}", color="tab:blue")
+
+        if val_values is not None:
+            plt.plot(epochs, val_values, "o-", label=f"val_{metric}", color="tab:orange")
+
+        plt.xlabel("Epoch")
+        plt.ylabel(metric)
+        plt.title(title or f"Training history: {metric}")
+        plt.xticks(epochs if len(epochs) <= 20 else None)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+    def plot_training_history_both(self, history, title_prefix="Fold 1"):
+        epochs = np.arange(1, len(history["train_loss"]) + 1)
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+        # слева — loss
+        ax = axes[0]
+        ax.plot(epochs, history["train_loss"], label="train_loss", color="tab:blue")
+        ax.plot(epochs, history["val_loss"], label="val_loss", color="tab:orange")
+        ax.set_title(f"{title_prefix}: loss")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("loss")
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+
+        # справа — accuracy
+        ax = axes[1]
+        ax.plot(epochs, history["train_acc"], label="train_acc", color="tab:blue")
+        ax.plot(epochs, history["val_acc"], label="val_acc", color="tab:orange")
+        ax.set_title(f"{title_prefix}: accuracy")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("acc")
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+
+        plt.tight_layout()
+        plt.show()
 
 
 
