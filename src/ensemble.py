@@ -10,6 +10,7 @@ from sklearn.linear_model import LinearRegression, LogisticRegression, RidgeClas
 from sklearn.model_selection import StratifiedKFold
 
 from . import modeling
+from .config import SEED, N_SPLITS
 
 from pathlib import Path
 
@@ -21,7 +22,7 @@ def _build_submission(
     """Собрать submission DataFrame из PassengerId и предсказаний."""
     return pd.DataFrame(
         {
-            "PassengerId": ids.values,
+            "PassengerId": ids.squeeze().values,
             "Survived": predictions.astype(int),
         }
     )
@@ -229,9 +230,9 @@ class StackingEnsemble:
         model_params: dict[str, dict] | None = None,
         meta_model_name: str = "ridge",
         meta_params: dict | None = None,
-        n_splits: int = 5,
-        random_state: int = 42,
-        transform_off: bool = True,
+        n_splits: int = N_SPLITS,
+        random_state: int = SEED,
+        transform_off: bool = False,
         threshold: float = 0.5,
     ) -> None:
         """Инициализировать конфигурацию stacking-ансамбля."""
@@ -247,11 +248,10 @@ class StackingEnsemble:
         self.meta_model_ = None
         self.oof_pred_: pd.DataFrame | None = None
         self.test_pred_: pd.DataFrame | None = None
+        self.base_models_: dict[str, list] = {}
 
     def _make_meta_model(self):
         """Создать мета-модель по её имени и параметрам."""
-        if self.meta_model_name == "linear":
-            return LinearRegression(**self.meta_params)
         if self.meta_model_name == "ridge":
             return RidgeClassifier(**self.meta_params)
         if self.meta_model_name == "logreg":
@@ -275,8 +275,11 @@ class StackingEnsemble:
         oof_pred = pd.DataFrame(index=X.index)
         test_pred = pd.DataFrame(index=X_test.index)
 
+        self.base_models_ = {}
+
         for model_name in self.model_names:
             params = self.model_params.get(model_name)
+            self.base_models_[model_name] = []
 
             oof_col = np.zeros(len(X))
             test_fold_pred = np.zeros((len(X_test), self.n_splits))
@@ -295,6 +298,8 @@ class StackingEnsemble:
 
                 model.fit(X_tr, y_tr)
 
+                self.base_models_[model_name].append(model)
+
                 val_proba = model.predict_proba(X_val)[:, 1]
                 test_proba = model.predict_proba(X_test)[:, 1]
 
@@ -307,6 +312,30 @@ class StackingEnsemble:
         self.oof_pred_ = oof_pred
         self.test_pred_ = test_pred
         return oof_pred, test_pred
+
+    def build_meta_data(
+            self,
+            X_new: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Построить мета-признаки для новых данных через сохранённые fold-модели."""
+        if not self.base_models_:
+            raise ValueError("Base models are not fitted yet. Call fit() first.")
+
+        meta_pred = pd.DataFrame(index=X_new.index)
+
+        for model_name in self.model_names:
+            if model_name not in self.base_models_:
+                raise ValueError(f"Models for '{model_name}' are not available.")
+
+            fold_models = self.base_models_[model_name]
+            fold_pred = np.zeros((len(X_new), len(fold_models)))
+
+            for fold, model in enumerate(fold_models):
+                fold_pred[:, fold] = model.predict_proba(X_new)[:, 1]
+
+            meta_pred[model_name] = fold_pred.mean(axis=1)
+
+        return meta_pred
 
     def fit(
         self,
@@ -325,12 +354,15 @@ class StackingEnsemble:
 
     def predict(
         self,
-        X_meta: pd.DataFrame,
+        X: pd.DataFrame,
         threshold: float | None = None,
+        is_meta_data: bool = True,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Вернуть вероятности и бинарные предсказания мета-модели."""
         if self.meta_model_ is None:
             raise ValueError("StackingEnsemble is not fitted yet.")
+
+        X_meta = X if is_meta_data else self.build_meta_data(X)
 
         decision_threshold = self.threshold if threshold is None else threshold
 

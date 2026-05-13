@@ -2,8 +2,12 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 .idea/
+
 data/raw/*.csv
 data/processed/*
+
 models/*
+!models/age_model.joblib
+
 output/*
 .env
