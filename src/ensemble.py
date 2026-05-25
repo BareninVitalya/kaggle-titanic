@@ -8,6 +8,7 @@ import pandas as pd
 from sklearn.ensemble import VotingClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression, RidgeClassifier
 from sklearn.model_selection import StratifiedKFold
+from sklearn.base import BaseEstimator, ClassifierMixin
 
 from . import modeling
 from .config import SEED, N_SPLITS
@@ -28,7 +29,7 @@ def _build_submission(
     )
 
 
-class SoftEnsemble:
+class SoftEnsemble(BaseEstimator, ClassifierMixin):
     """Кастомный soft-voting ансамбль с поддержкой весов и порога бинаризации."""
 
     def __init__(

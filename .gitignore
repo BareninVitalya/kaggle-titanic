@@ -3,11 +3,16 @@ __pycache__/
 .ipynb_checkpoints/
 .idea/
 
-data/raw/*.csv
+#data/raw/*
+!data/raw/.gitkeep
 data/processed/*
+!data/processed/.gitkeep
+catboost_info/
+output/submissions/*
+!output/submissions/.gitkeep
 
 models/*
 !models/age_model.joblib
+!models/.gitkeep
 
-output/*
 .env

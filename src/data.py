@@ -3,7 +3,7 @@
 from pathlib import Path
 import pandas as pd
 
-from .config import PROCESSED_DATA_DIR, TEST_PATH, TRAIN_PATH
+from .config import PROCESSED_DATA_DIR, TEST_PATH, TRAIN_PATH, OUTPUT_DIR
 
 
 def load_train() -> pd.DataFrame:
@@ -22,4 +22,12 @@ def save_processed(df: pd.DataFrame, name: str = "train_clean.csv") -> Path:
     path = PROCESSED_DATA_DIR / name
     df.to_csv(path, index=False)
     print(f"Saved processed data to {path}")
+    return path
+
+def save_submission(df: pd.DataFrame, name: str = "submission.csv") -> Path:
+    """Сохранить результат в output/submissions/."""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    path = OUTPUT_DIR / name
+    df.to_csv(path, index=False)
+    print(f"Saved submission data to {path}")
     return path

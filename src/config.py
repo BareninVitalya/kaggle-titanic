@@ -76,10 +76,10 @@ PCLASS_SEX_RANK = {
 
 # ── Дефолтные параметры моделей (из экспериментов в ноутбуке) ─────────────────
 DEFAULT_LOGREG_PARAMS = {
-    "max_iter":    2000,
-    "C":           0.5,
-    "l1_ratio":    0.0,
-    "solver":      "lbfgs",
+    "max_iter": 2000,
+    "C": 0.6,
+    "l1_ratio": 1,
+    "solver": "liblinear",
     "random_state": SEED,
 }
 
@@ -100,11 +100,11 @@ DEFAULT_TREE_PARAMS = {
 }
 
 DEFAULT_RF_PARAMS = {
-    "n_estimators":    300,
-    "criterion":       "gini",
-    "max_depth":       5,
-    "min_samples_split": 10,
-    "min_samples_leaf":  4,
+    "n_estimators": 700,
+    "criterion": 'entropy',
+    "min_samples_split": 40,
+    "min_samples_leaf": 3,
+    "max_depth": 12,
     "random_state":    SEED,
 }
 
@@ -188,23 +188,20 @@ OPENFE_PARAMS = {
 }
 
 DEFAULT_DNN_PARAMS = {
-    # Архитектура
-    "hidden_dims":      [16],   # список размеров скрытых слоёв
-    "activation":       "relu",     # relu | leakyrelu | gelu | tanh | selu | elu
-    "dropout":          0.0,        # 0.0 = Dropout выключен
+    "hidden_dims":      [32, ],   # список размеров скрытых слоёв
+    "activation":       "elu",     # relu | leakyrelu | gelu | tanh | selu | elu
+    "dropout":          0.3,        # 0.0 = Dropout выключен
     "batchnorm":        False,      # BatchNorm1d после каждого скрытого слоя
 
-    # Обучение
     "optimizer":        "adam",     # adam | adamw | sgd
     "lr":               1e-3,
     "weight_decay":     0.0,        # L2-регуляризация для AdamW/SGD
     "batch_size":       32,
-    "epochs":           50,
+    "epochs":           51,
 
-    # Scheduler (None = не использовать)
     "scheduler":        None,       # None | "cosine" | "step"
     "scheduler_params": {},         # доп. параметры для scheduler'а
 
-    # Loss
     "loss_fn":          "bce",      # BCEWithLogitsLoss
+
 }
